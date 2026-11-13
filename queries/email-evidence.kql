@@ -1,0 +1,28 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+let SelectedEntity = tolower(trim(@"\s+", base64_decode_tostring('{Entity:base64}')));
+let SelectedMessage = trim(@"\s+", base64_decode_tostring('{MessageId:base64}'));
+let Messages =
+    union isfuzzy=true
+        (datatable(MessageTime:datetime, MessageId:string, Recipient:string, Sender:string, Subject:string, DeliveryAction:string, ThreatTypes:string) []),
+        (EmailEvents
+        | where TimeGenerated between (StartTime .. EndTime)
+        | project MessageTime=TimeGenerated, MessageId=tostring(NetworkMessageId), Recipient=tolower(tostring(RecipientEmailAddress)),
+            Sender=tostring(SenderFromAddress), Subject=tostring(Subject), DeliveryAction=tostring(DeliveryAction), ThreatTypes=tostring(ThreatTypes))
+    | where (isnotempty(SelectedMessage) and MessageId == SelectedMessage)
+        or (isempty(SelectedMessage) and isnotempty(SelectedEntity) and Recipient == SelectedEntity);
+let Clicks =
+    union isfuzzy=true
+        (datatable(ClickTime:datetime, MessageId:string, ClickAccount:string, Url:string, ClickAction:string, ClickThrough:bool) []),
+        (UrlClickEvents
+        | where TimeGenerated between (StartTime .. EndTime)
+        | project ClickTime=TimeGenerated, MessageId=tostring(NetworkMessageId), ClickAccount=tolower(tostring(AccountUpn)),
+            Url=tostring(Url), ClickAction=tostring(ActionType), ClickThrough=tobool(IsClickedThrough))
+    | where isnotempty(MessageId);
+Messages
+| join kind=leftouter Clicks on MessageId, $left.Recipient == $right.ClickAccount
+| where isnull(ClickTime) or ClickTime >= MessageTime
+| project MessageTime, MessageId, Recipient, Sender, Subject, DeliveryAction, ThreatTypes, ClickTime, Url, ClickAction, ClickThrough,
+    Interpretation='Message/recipient association only; click telemetry does not prove successful authentication or execution'
+| where StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime
+| order by MessageTime desc

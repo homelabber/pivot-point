@@ -1,0 +1,62 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+let SelectedApp = tolower(trim(@"\s+", base64_decode_tostring('{AppId:base64}')));
+let MinimumEvents = tolong(base64_decode_tostring('{MinimumEvents:base64}'));
+let PrincipalMap =
+    union isfuzzy=true
+        (datatable(ServicePrincipalId:string, AppId:string) []),
+        (AADServicePrincipalSignInLogs
+        | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+        | project ServicePrincipalId=tolower(tostring(ServicePrincipalId)), AppId=tolower(tostring(AppId)))
+    | where isnotempty(ServicePrincipalId) and isnotempty(AppId)
+    | summarize Apps=make_set(AppId, 2) by ServicePrincipalId
+    | where array_length(Apps) == 1
+    | project PrincipalKey=ServicePrincipalId, MappedAppId=tostring(Apps[0]);
+let ConsentChanges =
+    union isfuzzy=true
+        (datatable(ChangeTime:datetime, Operation:string, TargetId:string, ExplicitAppId:string, Initiator:string, ConsentCorrelationId:string) []),
+        (AuditLogs
+        | where TimeGenerated between (StartTime .. EndTime)
+        | where Result =~ 'success'
+        | where OperationName in~ ('Consent to application', 'Add delegated permission grant', 'Add app role assignment to service principal')
+        | extend Initiator=coalesce(tostring(InitiatedBy.user.userPrincipalName), tostring(InitiatedBy.app.servicePrincipalId))
+        | mv-expand Target=TargetResources
+        | where tostring(Target.type) in~ ('ServicePrincipal', 'Application')
+        | extend Props=array_concat(todynamic(Target.modifiedProperties), dynamic([{"displayName":"_fallback","newValue":""}]))
+        | mv-expand Prop=Props
+        | extend PropertyName=tolower(tostring(Prop.displayName)), ParsedValue=parse_json(tostring(Prop.newValue))
+        | extend ExplicitAppId=iff(PropertyName in ('appid', 'applicationid', 'app.appid'),
+            tolower(trim(@'[\s"\[\]]+', tostring(ParsedValue))), '')
+        | project ChangeTime=TimeGenerated, Operation=OperationName,
+            TargetId=iff(tostring(Target.type) =~ 'ServicePrincipal', tolower(tostring(Target.id)), ''),
+            ExplicitAppId, Initiator, ConsentCorrelationId=tostring(CorrelationId))
+    | lookup kind=leftouter PrincipalMap on $left.TargetId == $right.PrincipalKey
+    | extend AppKey=coalesce(ExplicitAppId, MappedAppId)
+    | where AppKey matches regex '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    | where isempty(SelectedApp) or AppKey == SelectedApp
+    | summarize by ChangeTime, Operation, AppKey, Initiator, ConsentCorrelationId;
+let AppActivity =
+    union isfuzzy=true
+        (datatable(ActivityTime:datetime, AppKey:string, Account:string, SourceIp:string, Action:string, EventId:string) []),
+        (CloudAppEvents
+        | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+        | project ActivityTime=TimeGenerated, AppKey=tolower(tostring(OAuthAppId)),
+            Account=tostring(AccountId), SourceIp=tostring(IPAddress), Action=tostring(ActionType), EventId=tostring(ReportId))
+    | where isnotempty(AppKey)
+    | where isempty(SelectedApp) or AppKey == SelectedApp;
+let HistoricalApps = AppActivity
+    | where ActivityTime >= StartTime - 14d and ActivityTime < StartTime
+    | summarize by AppKey;
+let NovelActivity = AppActivity
+    | where ActivityTime between (StartTime .. EndTime)
+    | join kind=leftanti HistoricalApps on AppKey;
+ConsentChanges
+| join kind=inner NovelActivity on AppKey
+| where ActivityTime >= ChangeTime and ActivityTime <= ChangeTime + 24h
+| summarize FirstActivity=min(ActivityTime), LastActivity=max(ActivityTime), EventCount=count(),
+    Accounts=make_set(Account, 20), SourceIps=make_set(SourceIp, 20), Actions=make_set(Action, 20), EventIds=make_set(EventId, 20)
+    by AppKey, ChangeTime, Operation, Initiator, ConsentCorrelationId
+| where EventCount >= MinimumEvents
+| extend Interpretation='Hunt candidate: same app, ordered activity; not proof of compromise or actor attribution'
+| where StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime
+| order by FirstActivity desc

@@ -1,0 +1,8 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+print SelectedStart=StartTime, SelectedEnd=EndTime,
+    ScopeState=iff(StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime,
+        'Supported recent investigation period',
+        'Unsupported period: select a nonempty period entirely within the last 30 days, not in the future. Evidence panels intentionally return no rows.'),
+    QueryEnvelope='90 days to include pre-window baselines and incident snapshots; individual queries apply narrower filters',
+    ValidationState='Local package only: live KQL compilation, tenant mappings and coverage are not yet validated'

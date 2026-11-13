@@ -1,0 +1,72 @@
+{
+  "name": "Pivot Point",
+  "packageVersion": "1.0.0",
+  "kind": "read-only-workbook-extension",
+  "upstreamCommit": "9a9e5cf33a477ebc349b5c2c013d990246b45303",
+  "deploysEnabledRules": false,
+  "tenantValidated": false,
+  "queries": {
+    "data-impact": "ded8c2743b83758750bdd87ab9f9532991de30040af0284a90c87c04682f1a76",
+    "email-evidence": "3c7ffd718f82b9a14f5597b18a744420aafa653a884e09c479f0be659d20dba4",
+    "investigation-scope": "b730fa3ddbe364fb795a1df8f4676ce7210b05abfb4cf226302d995216e43cf8",
+    "oauth-consent-followed-by-new-app-activity": "1f9e3c1feb3b93326ee3520d948d38b73476277805144bc5e01df9d865bade5e",
+    "related-incidents": "cb671e61d2b3fc295f56f52313118a8f5d7ff762397c2ddcaf5a708ff49971c8",
+    "scenario-readiness": "f4cb7f5f0b90cc47fe664a8f1bf587cf0a007efefcfacf325de52b205b7c370e"
+  },
+  "sources": [
+    {
+      "table": "AuditLogs",
+      "scenario": "OAuth consent",
+      "keyRequirement": "isnotempty(tostring(TargetResources))",
+      "note": "Consent target and operation must be available"
+    },
+    {
+      "table": "AADServicePrincipalSignInLogs",
+      "scenario": "OAuth app-ID mapping",
+      "keyRequirement": "isnotempty(ServicePrincipalId) and isnotempty(AppId)",
+      "note": "Needed when consent audit lacks explicit application ID"
+    },
+    {
+      "table": "CloudAppEvents",
+      "scenario": "OAuth activity",
+      "keyRequirement": "isnotempty(tostring(OAuthAppId))",
+      "note": "Requires application IDs compatible with Entra AppId"
+    },
+    {
+      "table": "SecurityAlert",
+      "scenario": "Related alerts",
+      "keyRequirement": "isnotempty(SystemAlertId) and isnotempty(tostring(Entities))",
+      "note": "Entity fields must support exact matching"
+    },
+    {
+      "table": "SecurityIncident",
+      "scenario": "Related incidents",
+      "keyRequirement": "isnotempty(tostring(AlertIds))",
+      "note": "Alert-ID linkage required; historical snapshots may be outside query window"
+    },
+    {
+      "table": "EmailEvents",
+      "scenario": "Optional email",
+      "keyRequirement": "isnotempty(NetworkMessageId) and isnotempty(RecipientEmailAddress)",
+      "note": "Recipient and message ID required"
+    },
+    {
+      "table": "UrlClickEvents",
+      "scenario": "Optional email clicks",
+      "keyRequirement": "isnotempty(NetworkMessageId) and isnotempty(AccountUpn)",
+      "note": "Clicks without message IDs cannot be linked"
+    },
+    {
+      "table": "OfficeActivity",
+      "scenario": "Optional data-impact audit",
+      "keyRequirement": "isnotempty(UserId) and isnotempty(OfficeObjectId)",
+      "note": "Operation and outcome require analyst interpretation"
+    },
+    {
+      "table": "MicrosoftPurviewInformationProtection",
+      "scenario": "Optional Purview labels",
+      "keyRequirement": "isnotempty(UserId) and isnotempty(ObjectId)",
+      "note": "Does not include all Purview/DLP/Insider Risk signals"
+    }
+  ]
+}

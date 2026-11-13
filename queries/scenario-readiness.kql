@@ -1,0 +1,98 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+let Expected = datatable(Source:string, Scenario:string, Notes:string) [
+    'AuditLogs', 'OAuth consent', 'Consent target and operation must be available',
+    'AADServicePrincipalSignInLogs', 'OAuth app-ID mapping', 'Needed when consent audit lacks explicit application ID',
+    'CloudAppEvents', 'OAuth activity', 'Requires application IDs compatible with Entra AppId',
+    'SecurityAlert', 'Related alerts', 'Entity fields must support exact matching',
+    'SecurityIncident', 'Related incidents', 'Alert-ID linkage required; historical snapshots may be outside query window',
+    'EmailEvents', 'Optional email', 'Recipient and message ID required',
+    'UrlClickEvents', 'Optional email clicks', 'Clicks without message IDs cannot be linked',
+    'OfficeActivity', 'Optional data-impact audit', 'Operation and outcome require analyst interpretation',
+    'MicrosoftPurviewInformationProtection', 'Optional Purview labels', 'Does not include all Purview/DLP/Insider Risk signals'
+];
+let Observed = union isfuzzy=true
+    (datatable(Source:string, Scenario:string, Notes:string, ProbeResolved:long, CurrentEvents:long, UsableKeyEvents:long, HistoricalEvents:long, FirstObserved:datetime, LastObserved:datetime, MaximumLagMinutes:long) []),
+(AuditLogs
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(tostring(TargetResources)))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='AuditLogs', Scenario='OAuth consent', ProbeResolved=1, Notes='Consent target and operation must be available'),
+(AADServicePrincipalSignInLogs
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(ServicePrincipalId) and isnotempty(AppId))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='AADServicePrincipalSignInLogs', Scenario='OAuth app-ID mapping', ProbeResolved=1, Notes='Needed when consent audit lacks explicit application ID'),
+(CloudAppEvents
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(tostring(OAuthAppId)))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='CloudAppEvents', Scenario='OAuth activity', ProbeResolved=1, Notes='Requires application IDs compatible with Entra AppId'),
+(SecurityAlert
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(SystemAlertId) and isnotempty(tostring(Entities)))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='SecurityAlert', Scenario='Related alerts', ProbeResolved=1, Notes='Entity fields must support exact matching'),
+(SecurityIncident
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(tostring(AlertIds)))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='SecurityIncident', Scenario='Related incidents', ProbeResolved=1, Notes='Alert-ID linkage required; historical snapshots may be outside query window'),
+(EmailEvents
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(NetworkMessageId) and isnotempty(RecipientEmailAddress))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='EmailEvents', Scenario='Optional email', ProbeResolved=1, Notes='Recipient and message ID required'),
+(UrlClickEvents
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(NetworkMessageId) and isnotempty(AccountUpn))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='UrlClickEvents', Scenario='Optional email clicks', ProbeResolved=1, Notes='Clicks without message IDs cannot be linked'),
+(OfficeActivity
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(UserId) and isnotempty(OfficeObjectId))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='OfficeActivity', Scenario='Optional data-impact audit', ProbeResolved=1, Notes='Operation and outcome require analyst interpretation'),
+(MicrosoftPurviewInformationProtection
+    | where TimeGenerated >= StartTime - 14d and TimeGenerated <= EndTime
+    | summarize CurrentEvents=countif(TimeGenerated >= StartTime),
+        UsableKeyEvents=countif(TimeGenerated >= StartTime and (isnotempty(UserId) and isnotempty(ObjectId))),
+        HistoricalEvents=countif(TimeGenerated < StartTime),
+        FirstObserved=min(TimeGenerated), LastObserved=max(TimeGenerated),
+        MaximumLagMinutes=max(datetime_diff('minute', ingestion_time(), TimeGenerated))
+    | extend Source='MicrosoftPurviewInformationProtection', Scenario='Optional Purview labels', ProbeResolved=1, Notes='Does not include all Purview/DLP/Insider Risk signals');
+Expected
+| join kind=leftouter (Observed | project-away Scenario, Notes) on Source
+| extend State=case(isnull(ProbeResolved), 'Unavailable or inaccessible: inspect query warnings',
+    CurrentEvents == 0, 'No events in selected period: not proof of connector failure',
+    UsableKeyEvents == 0, 'Events present but required linkage keys absent',
+    'Observed usable keys: validate operation-level coverage'),
+    Baseline=iff(coalesce(HistoricalEvents, 0) == 0, 'No pre-window history observed', 'History observed; completeness not established')
+| project Source, Scenario, State, CurrentEvents, UsableKeyEvents, HistoricalEvents, Baseline,
+    FirstObserved, LastObserved, MaximumLagMinutes, Notes
+| where StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime
+| order by Source asc

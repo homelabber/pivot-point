@@ -1,0 +1,27 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+let SelectedEntity = tolower(trim(@"\s+", base64_decode_tostring('{Entity:base64}')));
+union isfuzzy=true
+    (datatable(EventTime:datetime, Source:string, Account:string, Operation:string, ObjectId:string, LabelId:string, Outcome:string, EvidenceId:string) []),
+    (OfficeActivity
+    | where TimeGenerated between (StartTime .. EndTime)
+    | where OfficeWorkload in~ ('SharePoint', 'OneDrive', 'Exchange')
+    | where Operation in~ ('FileDownloaded', 'FileAccessed', 'FileSyncDownloadedFull', 'SharingSet', 'AnonymousLinkCreated', 'SharingInvitationCreated', 'MailItemsAccessed', 'DlpRuleMatch', 'SensitivityLabelApplied', 'SensitivityLabelUpdated', 'SensitivityLabelRemoved')
+    | project EventTime=TimeGenerated, Source='OfficeActivity', Account=tolower(tostring(UserId)),
+        Operation=tostring(Operation), ObjectId=tostring(OfficeObjectId),
+        LabelId=tostring(column_ifexists('SensitivityLabelId', '')),
+        Outcome=tostring(ResultStatus), EvidenceId=tostring(column_ifexists('OfficeId', ''))),
+    (MicrosoftPurviewInformationProtection
+    | where TimeGenerated between (StartTime .. EndTime)
+    | project EventTime=TimeGenerated, Source='MicrosoftPurviewInformationProtection',
+        Account=tolower(tostring(column_ifexists('UserId', ''))),
+        Operation=tostring(column_ifexists('Operation', '')),
+        ObjectId=tostring(column_ifexists('ObjectId', '')),
+        LabelId=tostring(column_ifexists('SensitivityLabelId', '')),
+        Outcome=tostring(column_ifexists('ResultStatus', '')),
+        EvidenceId=tostring(column_ifexists('Id', '')))
+| where isnotempty(SelectedEntity) and Account == SelectedEntity
+| extend Interpretation='Observed audit activity only; labels are context, not proof of exfiltration. Verify operation and outcome.'
+| project EventTime, Source, Account, Operation, ObjectId, LabelId, Outcome, EvidenceId, Interpretation
+| where StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime
+| order by EventTime desc

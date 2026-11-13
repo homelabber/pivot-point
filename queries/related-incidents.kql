@@ -1,0 +1,40 @@
+let StartTime = {TimeRange:start};
+let EndTime = {TimeRange:end};
+let SelectedEntity = tolower(trim(@"\s+", base64_decode_tostring('{Entity:base64}')));
+let Alerts =
+    union isfuzzy=true
+        (datatable(AlertTime:datetime, AlertId:string, AlertName:string, Severity:string, EntitiesJson:string, Product:string) []),
+        (SecurityAlert
+        | where TimeGenerated between (StartTime .. EndTime)
+        | summarize arg_max(TimeGenerated, *) by SystemAlertId
+        | project AlertTime=TimeGenerated, AlertId=tostring(SystemAlertId), AlertName=tostring(AlertName),
+            Severity=tostring(AlertSeverity), EntitiesJson=tostring(Entities), Product=tostring(ProductName))
+    | where isnotempty(SelectedEntity)
+    | mv-expand MatchedEntity=parse_json(EntitiesJson)
+    | extend EntityType=tolower(tostring(MatchedEntity.Type)),
+        Upn=tolower(iff(isnotempty(tostring(MatchedEntity.UPNSuffix)),
+            strcat(tostring(MatchedEntity.Name), '@', tostring(MatchedEntity.UPNSuffix)), '')),
+        HostFqdn=tolower(iff(isnotempty(tostring(MatchedEntity.DnsDomain)),
+            strcat(tostring(MatchedEntity.HostName), '.', tostring(MatchedEntity.DnsDomain)), ''))
+    | where (EntityType == 'account' and (SelectedEntity == Upn or SelectedEntity == tolower(tostring(MatchedEntity.AadUserId)) or SelectedEntity == tolower(tostring(MatchedEntity.Sid))))
+        or (EntityType == 'ip' and SelectedEntity == tolower(tostring(MatchedEntity.Address)))
+        or (EntityType == 'host' and (SelectedEntity == tolower(tostring(MatchedEntity.HostName)) or SelectedEntity == HostFqdn))
+        or (EntityType == 'cloud-application' and SelectedEntity == tolower(tostring(MatchedEntity.AppId)))
+        or (EntityType == 'azure-resource' and SelectedEntity == tolower(tostring(MatchedEntity.ResourceId)))
+    | summarize arg_max(AlertTime, *) by AlertId;
+let Incidents =
+    union isfuzzy=true
+        (datatable(IncidentModified:datetime, IncidentNumber:long, IncidentTitle:string, Status:string, IncidentUrl:string, IncidentAlerts:dynamic) []),
+        (SecurityIncident
+        | where TimeGenerated between (StartTime - 30d .. EndTime)
+        | summarize arg_max(TimeGenerated, *) by IncidentName
+        | project IncidentModified=TimeGenerated, IncidentNumber=tolong(IncidentNumber),
+            IncidentTitle=Title, Status, IncidentUrl, IncidentAlerts=AlertIds)
+    | mv-expand IncidentAlertId=IncidentAlerts
+    | extend IncidentAlertId=tostring(IncidentAlertId);
+Alerts
+| join kind=leftouter Incidents on $left.AlertId == $right.IncidentAlertId
+| project AlertTime, AlertName, Severity, Product, AlertId, IncidentNumber, IncidentTitle, Status, IncidentUrl,
+    MatchBasis='Exact supported entity field; association is not causation'
+| where StartTime >= ago(30d) and EndTime <= now() + 5m and StartTime < EndTime
+| order by AlertTime desc
